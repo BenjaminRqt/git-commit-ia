@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 )
 
-// Config regroupe tous les réglages de l'outil. Tout est surchargeable via un
-// fichier JSON ; seule la clé API vient de l'environnement.
+// Config holds all tool settings. Everything is overrideable via a
+// JSON file; only the API key comes from the environment.
 type Config struct {
 	Model         string   `json:"model"`
 	Language      string   `json:"language"`
@@ -17,10 +17,10 @@ type Config struct {
 	MaxDiffChars  int      `json:"max_diff_chars"`
 	GenerateBody  bool     `json:"generate_body"`
 
-	APIKey string `json:"-"` // injectée depuis ANTHROPIC_API_KEY
+	APIKey string `json:"-"` // injected from ANTHROPIC_API_KEY
 }
 
-// Default renvoie une configuration prête à l'emploi.
+// Default returns a ready-to-use configuration.
 func Default() Config {
 	return Config{
 		Model:         "claude-haiku-4-5-20251001",
@@ -32,8 +32,8 @@ func Default() Config {
 	}
 }
 
-// Load part des valeurs par défaut puis applique le premier fichier de config
-// trouvé (les champs absents gardent leur valeur par défaut), et lit la clé API.
+// Load starts with default values then applies the first config file
+// found (missing fields keep their default value), and reads the API key.
 func Load() (Config, error) {
 	cfg := Default()
 	for _, p := range candidatePaths() {
@@ -42,7 +42,7 @@ func Load() (Config, error) {
 			continue
 		}
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			return cfg, fmt.Errorf("config %s invalide : %w", p, err)
+			return cfg, fmt.Errorf("invalid config %s: %w", p, err)
 		}
 		break
 	}
@@ -50,7 +50,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// candidatePaths cherche d'abord une config propre au dépôt, puis une globale.
+// candidatePaths searches for a repository-specific config first, then a global one.
 func candidatePaths() []string {
 	paths := []string{".git-ai-commit.json"}
 	if home, err := os.UserHomeDir(); err == nil {

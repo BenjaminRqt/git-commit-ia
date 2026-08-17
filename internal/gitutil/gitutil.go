@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// run exécute git et renvoie stdout, ou une erreur enrichie de stderr.
+// run executes git and returns stdout, or an error enriched with stderr.
 func run(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	var out, errb bytes.Buffer
@@ -19,44 +19,44 @@ func run(args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s : %s", strings.Join(args, " "), msg)
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
 	return out.String(), nil
 }
 
-// InRepo indique si le dossier courant est dans un dépôt git.
+// InRepo indicates if the current folder is inside a git repository.
 func InRepo() bool {
 	_, err := run("rev-parse", "--is-inside-work-tree")
 	return err == nil
 }
 
-// StageAll fait un `git add -A`.
+// StageAll performs a `git add -A`.
 func StageAll() error {
 	_, err := run("add", "-A")
 	return err
 }
 
-// StagedDiff renvoie le diff indexé (git diff --cached).
+// StagedDiff returns the staged diff (git diff --cached).
 func StagedDiff() (string, error) { return run("diff", "--cached") }
 
-// HasCommits renvoie vrai si le dépôt a au moins un commit.
+// HasCommits returns true if the repository has at least one commit.
 func HasCommits() bool {
 	_, err := run("rev-parse", "--verify", "HEAD")
 	return err == nil
 }
 
-// AmendDiff renvoie le diff incluant le dernier commit et les changements indexés.
+// AmendDiff returns the diff including the last commit and staged changes.
 func AmendDiff() (string, error) {
 	if !HasCommits() {
-		return "", fmt.Errorf("aucun commit à amender")
+		return "", fmt.Errorf("no commit to amend")
 	}
 	return run("diff", "--cached", "HEAD^")
 }
 
-// StagedStat renvoie le résumé des fichiers indexés.
+// StagedStat returns the summary of staged files.
 func StagedStat() (string, error) { return run("diff", "--cached", "--stat") }
 
-// AmendStat renvoie le résumé des changements en mode amend.
+// AmendStat returns the summary of changes in amend mode.
 func AmendStat() (string, error) {
 	if !HasCommits() {
 		return "", nil
@@ -64,13 +64,13 @@ func AmendStat() (string, error) {
 	return run("diff", "--cached", "HEAD^", "--stat")
 }
 
-// CurrentBranch renvoie le nom de la branche courante.
+// CurrentBranch returns the name of the current branch.
 func CurrentBranch() (string, error) {
 	out, err := run("branch", "--show-current")
 	return strings.TrimSpace(out), err
 }
 
-// ExtractTicket cherche la référence de ticket dans le nom de branche.
+// ExtractTicket searches for a ticket reference in the branch name.
 func ExtractTicket(branch, pattern string) string {
 	if pattern == "" {
 		return ""
@@ -82,9 +82,9 @@ func ExtractTicket(branch, pattern string) string {
 	return re.FindString(branch)
 }
 
-// CommitFromMessage crée le commit à partir du message.
-// Si edit vaut true, git ouvre l'éditeur pré-rempli avant de valider.
-// Si amend vaut true, le commit amende le précédent.
+// CommitFromMessage creates the commit from the message.
+// If edit is true, git opens the pre-filled editor before validating.
+// If amend is true, the commit amends the previous one.
 func CommitFromMessage(message string, edit, amend bool) error {
 	f, err := os.CreateTemp("", "git-ai-commit-*.txt")
 	if err != nil {
@@ -104,7 +104,7 @@ func CommitFromMessage(message string, edit, amend bool) error {
 		args = append(args, "--amend")
 	}
 	cmd := exec.Command("git", args...)
-	// On relie les flux au terminal pour que l'éditeur fonctionne.
+	// Connect streams to terminal for the editor to work.
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

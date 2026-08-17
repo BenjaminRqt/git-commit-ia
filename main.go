@@ -22,11 +22,11 @@ func main() {
 }
 
 func run() error {
-	autoYes := flag.Bool("y", false, "committer sans confirmation")
-	stageAll := flag.Bool("a", false, "git add -A avant de générer")
-	amend := flag.Bool("r", false, "amender le dernier commit")
-	printOnly := flag.Bool("print", false, "afficher le message sans committer")
-	modelOverride := flag.String("model", "", "surcharger le modèle")
+	autoYes := flag.Bool("y", false, "commit without confirmation")
+	stageAll := flag.Bool("a", false, "git add -A before generating")
+	amend := flag.Bool("r", false, "amend the last commit")
+	printOnly := flag.Bool("print", false, "print the message without committing")
+	modelOverride := flag.String("model", "", "override the model")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -37,10 +37,10 @@ func run() error {
 		cfg.Model = *modelOverride
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("variable d'environnement ANTHROPIC_API_KEY manquante")
+		return fmt.Errorf("missing ANTHROPIC_API_KEY environment variable")
 	}
 	if !gitutil.InRepo() {
-		return fmt.Errorf("ce dossier n'est pas un dépôt git")
+		return fmt.Errorf("this folder is not a git repository")
 	}
 
 	if *stageAll {
@@ -61,11 +61,11 @@ func run() error {
 	if strings.TrimSpace(diff) == "" {
 		if *amend {
 			if !gitutil.HasCommits() {
-				return fmt.Errorf("impossible d'amender : aucun commit dans ce dépôt")
+				return fmt.Errorf("cannot amend: no commits in this repository")
 			}
-			return fmt.Errorf("aucun changement à amender (HEAD^ inaccessible ou aucun diff)")
+			return fmt.Errorf("no changes to amend (HEAD^ inaccessible or no diff)")
 		}
-		return fmt.Errorf("aucun changement indexé — fais `git add ...` ou utilise -a")
+		return fmt.Errorf("no staged changes — use `git add ...` or use -a")
 	}
 
 	branch, _ := gitutil.CurrentBranch()
@@ -81,9 +81,9 @@ func run() error {
 		fmt.Print(stat)
 	}
 	if ticket != "" {
-		fmt.Printf("Ticket détecté : %s  (branche %s)\n", ticket, branch)
+		fmt.Printf("Detected ticket: %s  (branch %s)\n", ticket, branch)
 	} else {
-		fmt.Printf("Aucun ticket détecté dans la branche %s\n", branch)
+		fmt.Printf("No ticket detected in branch %s\n", branch)
 	}
 
 	client := ai.New(cfg.APIKey, cfg.Model)
@@ -96,9 +96,9 @@ func run() error {
 			return err
 		}
 
-		fmt.Println("\n─────────── Message proposé ───────────")
+		fmt.Println("\n─────────── Proposed Message ───────────")
 		fmt.Println(msg)
-		fmt.Println("───────────────────────────────────────")
+		fmt.Println("────────────────────────────────────────")
 
 		if *printOnly {
 			return nil
@@ -107,7 +107,7 @@ func run() error {
 			return gitutil.CommitFromMessage(msg, false, *amend)
 		}
 
-		fmt.Print("[v]alider  [e]diter  [r]égénérer  [q]uitter › ")
+		fmt.Print("[v]alidate  [e]dit  [r]egenerate  [q]uit › ")
 		choice, _ := reader.ReadString('\n')
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "v", "":
@@ -115,21 +115,21 @@ func run() error {
 		case "e":
 			return gitutil.CommitFromMessage(msg, true, *amend)
 		case "r":
-			fmt.Print("Instruction supplémentaire (Entrée pour ignorer) › ")
+			fmt.Print("Extra instruction (Enter to skip) › ")
 			h, _ := reader.ReadString('\n')
 			hint = strings.TrimSpace(h)
 		case "q":
-			fmt.Println("Abandon.")
+			fmt.Println("Aborted.")
 			return nil
 		default:
-			fmt.Println("Choix inconnu.")
+			fmt.Println("Unknown choice.")
 		}
 	}
 }
 
 func generate(client *ai.Client, cfg config.Config, diff, branch, ticket, hint string) (string, error) {
 	done := make(chan struct{})
-	go spinner("Génération du message", done)
+	go spinner("Generating message", done)
 	msg, err := client.GenerateCommit(context.Background(), ai.Request{
 		Diff:         diff,
 		Branch:       branch,
@@ -141,7 +141,7 @@ func generate(client *ai.Client, cfg config.Config, diff, branch, ticket, hint s
 		MaxDiffChars: cfg.MaxDiffChars,
 	})
 	close(done)
-	fmt.Print("\r\033[K") // efface la ligne du spinner
+	fmt.Print("\r\033[K") // clear spinner line
 	return msg, err
 }
 
