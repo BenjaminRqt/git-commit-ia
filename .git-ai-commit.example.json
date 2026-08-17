@@ -1,0 +1,8 @@
+{
+  "model": "claude-haiku-4-5-20251001",
+  "language": "français",
+  "types": ["feat", "fix", "refactor", "docs", "style", "test", "chore", "perf"],
+  "ticket_pattern": "[A-Z]{2,}-\\d+",
+  "max_diff_chars": 12000,
+  "generate_body": true
+}
