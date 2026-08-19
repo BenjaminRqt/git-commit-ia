@@ -12,6 +12,8 @@ import (
 	"git-ai-commit/internal/ai"
 	"git-ai-commit/internal/config"
 	"git-ai-commit/internal/gitutil"
+	"git-ai-commit/internal/ticket"
+	"git-ai-commit/internal/ticket/provider"
 )
 
 func main() {
@@ -27,6 +29,7 @@ func run() error {
 	amend := flag.Bool("r", false, "amend the last commit")
 	printOnly := flag.Bool("print", false, "print the message without committing")
 	modelOverride := flag.String("model", "", "override the model")
+	noTicket := flag.Bool("no-ticket", false, "disable ticket provider for this run")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -69,7 +72,7 @@ func run() error {
 	}
 
 	branch, _ := gitutil.CurrentBranch()
-	ticket := gitutil.ExtractTicket(branch, cfg.TicketPattern)
+	ticketKey := gitutil.ExtractTicket(branch, cfg.TicketPattern)
 
 	var stat string
 	if *amend {
@@ -80,10 +83,25 @@ func run() error {
 	if stat != "" {
 		fmt.Print(stat)
 	}
-	if ticket != "" {
-		fmt.Printf("Detected ticket: %s  (branch %s)\n", ticket, branch)
+	if ticketKey != "" {
+		fmt.Printf("Detected ticket: %s  (branch %s)\n", ticketKey, branch)
 	} else {
 		fmt.Printf("No ticket detected in branch %s\n", branch)
+	}
+
+	// Fetch ticket context via the factory
+	var ticketInfo *ticket.Ticket
+	if !*noTicket && ticketKey != "" {
+		p := provider.New(provider.Config{
+			Provider:    cfg.TicketProvider,
+			JiraBaseURL: cfg.JiraBaseURL,
+		})
+		info, err := p.Fetch(ticketKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠ Could not fetch ticket %s: %v\n", ticketKey, err)
+		} else {
+			ticketInfo = info
+		}
 	}
 
 	client := ai.New(cfg.APIKey, cfg.Model)
@@ -91,11 +109,22 @@ func run() error {
 	hint := ""
 
 	for {
-		msg, err := generate(client, cfg, diff, branch, ticket, hint)
+		msg, err := generate(client, cfg, diff, branch, ticketKey, ticketInfo, hint)
 		if err != nil {
 			return err
 		}
 
+		if ticketInfo != nil {
+			fmt.Println("\n─────────── Initial request ───────────")
+			fmt.Printf("Ticket: %s — %s\n", ticketKey, ticketInfo.Summary)
+			if ticketInfo.Description != "" {
+				desc := ticketInfo.Description
+				if rs := []rune(desc); len(rs) > 200 {
+					desc = string(rs[:200]) + "…"
+				}
+				fmt.Printf("Request: %s\n", desc)
+			}
+		}
 		fmt.Println("\n─────────── Proposed Message ───────────")
 		fmt.Println(msg)
 		fmt.Println("────────────────────────────────────────")
@@ -127,18 +156,20 @@ func run() error {
 	}
 }
 
-func generate(client *ai.Client, cfg config.Config, diff, branch, ticket, hint string) (string, error) {
+func generate(client *ai.Client, cfg config.Config, diff, branch, ticketKey string, ticketInfo *ticket.Ticket, hint string) (string, error) {
 	done := make(chan struct{})
 	go spinner("Generating message", done)
 	msg, err := client.GenerateCommit(context.Background(), ai.Request{
-		Diff:         diff,
-		Branch:       branch,
-		Ticket:       ticket,
-		Hint:         hint,
-		Language:     cfg.Language,
-		Types:        cfg.Types,
-		GenerateBody: cfg.GenerateBody,
-		MaxDiffChars: cfg.MaxDiffChars,
+		Diff:           diff,
+		Branch:         branch,
+		Ticket:         ticketKey,
+		TicketInfo:     ticketInfo,
+		MaxTicketChars: cfg.MaxTicketChars,
+		Hint:           hint,
+		Language:       cfg.Language,
+		Types:          cfg.Types,
+		GenerateBody:   cfg.GenerateBody,
+		MaxDiffChars:   cfg.MaxDiffChars,
 	})
 	close(done)
 	fmt.Print("\r\033[K") // clear spinner line
