@@ -5,9 +5,9 @@ your staged changes.
 
 ## What it does & how it works
 
-`git-ai-commit` reads your staged diff and asks the Anthropic API for a commit
-message that follows a strict `Type - What - Ticket` format. It runs as a native
-git subcommand — `git ai-commit` — because git executes any binary named
+`git-ai-commit` reads your staged diff and asks an AI API for a commit message
+that follows a strict `Type - What - Ticket` format. It runs as a native git
+subcommand — `git ai-commit` — because git executes any binary named
 `git-ai-commit` found on your `PATH`.
 
 Each run:
@@ -35,7 +35,7 @@ Handy flags:
 | `-r`           | amend the last commit                           |
 | `--print`      | print the message without committing            |
 | `--no-ticket`  | skip the ticket provider for this run           |
-| `--model <id>` | override the model (e.g. `claude-sonnet-5`)     |
+| `--model <id>` | override the model (e.g. `gpt-4o`)              |
 
 When regenerating, you can add a freeform hint like *"focus on the Doctrine
 migration"* or *"type = fix"*.
@@ -53,7 +53,11 @@ The binary **must** keep the exact name `git-ai-commit` for the git subcommand t
 work. Then set your API key (add it to `~/.zshrc` or `~/.bashrc` to persist it):
 
 ```bash
+# Anthropic (default)
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# or OpenAI
+export OPENAI_API_KEY="sk-..."
 ```
 
 Check it works with `git ai-commit -h`. If the command isn't found, confirm the
@@ -69,7 +73,9 @@ earlier ones leave unset):
 
 | Field              | Default                                               | Role                                              |
 |--------------------|-------------------------------------------------------|---------------------------------------------------|
-| `model`            | `claude-haiku-4-5-20251001`                           | Anthropic model                                   |
+| `ai_provider`      | `anthropic`                                           | AI backend: `"anthropic"` or `"openai"`           |
+| `model`            | *(adapter default)*                                   | Model ID for the chosen provider (empty = default)|
+| `openai_base_url`  | *(empty = `https://api.openai.com/v1`)*               | Override for Azure / OpenAI-compatible APIs       |
 | `language`         | `français`                                            | Message language                                  |
 | `types`            | `feat, fix, refactor, docs, style, test, chore, perf` | Allowed vocabulary for `Type`                     |
 | `ticket_pattern`   | `[A-Z]{2,}-\d+`                                        | Regex to extract the ticket from the branch       |
@@ -79,12 +85,20 @@ earlier ones leave unset):
 | `jira_base_url`    | *(empty)*                                             | Jira base URL, e.g. `https://acme.atlassian.net`  |
 | `max_ticket_chars` | `500`                                                 | Max ticket-description chars sent to the model    |
 
-**Secrets** (API key and provider credentials) live in environment variables only,
+Default models per adapter:
+
+| Provider    | Default model            |
+|-------------|--------------------------|
+| `anthropic` | `claude-haiku-4-5-20251001` |
+| `openai`    | `gpt-4o-mini`            |
+
+**Secrets** (API keys and provider credentials) live in environment variables only,
 never in config files:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export JIRA_EMAIL="you@example.com"        # only if ticket_provider = "jira"
+export ANTHROPIC_API_KEY="sk-ant-..."   # required if ai_provider = "anthropic" (default)
+export OPENAI_API_KEY="sk-..."          # required if ai_provider = "openai"
+export JIRA_EMAIL="you@example.com"     # only if ticket_provider = "jira"
 export JIRA_API_TOKEN="your-jira-token"
 ```
 
@@ -116,12 +130,27 @@ self-contained. Keep it that way.
 ### Architecture
 
 ```
-main.go                 entry point, flags, interactive loop
+main.go                   entry point, flags, interactive loop
 internal/
-├── ai/                 Anthropic client + prompt building
-├── config/             config struct, JSON + env loading
-├── gitutil/            git wrappers (diff, branch, ticket, commit)
-└── ticket/             Provider interface + agnostic Ticket type + Noop adapter
-    ├── jira/           Jira adapter (API v2, Basic Auth) + type mapping
-    └── provider/       factory: picks the adapter from config
+├── ai/                   Generator interface + prompt building (shared, provider-agnostic)
+│   ├── anthropic/        Anthropic adapter (API v1/messages)
+│   ├── openai/           OpenAI adapter (chat/completions)
+│   └── provider/         factory: picks the AI adapter from config
+├── config/               config struct, JSON + env loading
+├── gitutil/              git wrappers (diff, branch, ticket, commit)
+└── ticket/               Provider interface + agnostic Ticket type + Noop adapter
+    ├── jira/             Jira adapter (API v2, Basic Auth) + type mapping
+    └── provider/         factory: picks the ticket adapter from config
 ```
+
+### Adding a new AI provider
+
+1. Create `internal/ai/<name>/<name>.go` implementing `ai.Generator`
+   (`Complete(ctx, system, user, model string, maxTokens int) (string, error)`).
+2. Register the new case in `internal/ai/provider/factory.go`.
+3. Add any config fields in `internal/config/config.go`.
+4. Document the new `PROVIDER_API_KEY` environment variable.
+5. No change to `main.go` or prompt-building logic.
+
+Prompt construction (`buildSystem` / `buildUser`) stays in `internal/ai` and is
+**shared across all adapters** — never duplicate it.

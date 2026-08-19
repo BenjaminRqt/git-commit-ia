@@ -19,8 +19,10 @@ type Config struct {
 	TicketProvider string   `json:"ticket_provider"`
 	JiraBaseURL    string   `json:"jira_base_url"`
 	MaxTicketChars int      `json:"max_ticket_chars"`
+	AIProvider     string   `json:"ai_provider"`
+	OpenAIBaseURL  string   `json:"openai_base_url"`
 
-	APIKey string `json:"-"` // injected from ANTHROPIC_API_KEY
+	APIKey string `json:"-"` // injected from env (ANTHROPIC_API_KEY or OPENAI_API_KEY)
 }
 
 // Default returns a ready-to-use configuration.
@@ -35,6 +37,8 @@ func Default() Config {
 		TicketProvider: "",
 		JiraBaseURL:    "",
 		MaxTicketChars: 500,
+		AIProvider:     "anthropic",
+		OpenAIBaseURL:  "",
 	}
 }
 
@@ -52,7 +56,7 @@ func Load() (Config, error) {
 		}
 		break
 	}
-	cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+	// APIKey is not loaded here; each AI adapter reads its own env variable.
 	return cfg, nil
 }
 
