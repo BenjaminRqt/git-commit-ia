@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"git-ai-commit/internal/ticket"
 )
 
 const endpoint = "https://api.anthropic.com/v1/messages"
@@ -30,14 +32,16 @@ func New(apiKey, model string) *Client {
 
 // Request gathers the context needed for message generation.
 type Request struct {
-	Diff         string
-	Branch       string
-	Ticket       string
-	Hint         string
-	Language     string
-	Types        []string
-	GenerateBody bool
-	MaxDiffChars int
+	Diff           string
+	Branch         string
+	Ticket         string
+	TicketInfo     *ticket.Ticket
+	MaxTicketChars int
+	Hint           string
+	Language       string
+	Types          []string
+	GenerateBody   bool
+	MaxDiffChars   int
 }
 
 // GenerateCommit asks the model for a formatted commit message.
@@ -108,7 +112,17 @@ func cleanup(s string) string {
 func buildSystem(r Request) string {
 	bodyRule := ""
 	if r.GenerateBody {
-		bodyRule = "Next, a blank line and 1 to 5 bullets (\"- ...\") describing key changes.\n"
+		bodyRule = "Next, a blank line and at most 3 bullets (\"- ...\") focused on WHY/impact, not a line-by-line inventory of the diff.\n"
+	}
+	ticketGuidance := ""
+	if r.TicketInfo != nil {
+		ticketGuidance = `
+When ticket context is provided:
+- The "What" must describe the BUSINESS RESULT for the user (problem solved, value delivered), not the technical detail of the diff.
+- Use the ticket type as a hint to choose the commit Type, but stay within the allowed list.
+- The ticket summary and description express the INTENT; the diff ensures accuracy.
+- NEVER copy the ticket description verbatim into the commit message.
+`
 	}
 	return fmt.Sprintf(`You generate Git commit messages in %s.
 
@@ -119,9 +133,9 @@ Rules:
 - Type: a single word from: %s
 - What: concise description in imperative mood (approx 60 chars max), capitalized, no trailing period
 - Ticket: the reference provided as is, or "N/A" if none is provided
-%s
+%s%s
 Respond ONLY with the raw commit message, no backticks or commentary.`,
-		r.Language, strings.Join(r.Types, ", "), bodyRule)
+		r.Language, strings.Join(r.Types, ", "), bodyRule, ticketGuidance)
 }
 
 func buildUser(r Request) string {
@@ -131,14 +145,25 @@ func buildUser(r Request) string {
 			diff = string(rs[:r.MaxDiffChars]) + "\n... [diff truncated]"
 		}
 	}
-	ticket := r.Ticket
-	if ticket == "" {
-		ticket = "N/A"
+	ticketRef := r.Ticket
+	if ticketRef == "" {
+		ticketRef = "N/A"
 	}
 	hint := ""
 	if r.Hint != "" {
 		hint = "Extra instruction: " + r.Hint + "\n"
 	}
-	return fmt.Sprintf("Branch: %s\nTicket: %s\n%s\nStaged diff:\n```diff\n%s\n```",
-		r.Branch, ticket, hint, diff)
+	ticketContext := ""
+	if r.TicketInfo != nil {
+		desc := r.TicketInfo.Description
+		if r.MaxTicketChars > 0 {
+			if rs := []rune(desc); len(rs) > r.MaxTicketChars {
+				desc = string(rs[:r.MaxTicketChars]) + "... [truncated]"
+			}
+		}
+		ticketContext = fmt.Sprintf("\nTicket context:\n- Suggested type: %s\n- Summary: %s\n- Description: %s\n",
+			r.TicketInfo.Type, r.TicketInfo.Summary, desc)
+	}
+	return fmt.Sprintf("Branch: %s\nTicket: %s\n%s%s\nStaged diff:\n```diff\n%s\n```",
+		r.Branch, ticketRef, ticketContext, hint, diff)
 }

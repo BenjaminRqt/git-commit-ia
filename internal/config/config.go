@@ -10,12 +10,15 @@ import (
 // Config holds all tool settings. Everything is overrideable via a
 // JSON file; only the API key comes from the environment.
 type Config struct {
-	Model         string   `json:"model"`
-	Language      string   `json:"language"`
-	Types         []string `json:"types"`
-	TicketPattern string   `json:"ticket_pattern"`
-	MaxDiffChars  int      `json:"max_diff_chars"`
-	GenerateBody  bool     `json:"generate_body"`
+	Model          string   `json:"model"`
+	Language       string   `json:"language"`
+	Types          []string `json:"types"`
+	TicketPattern  string   `json:"ticket_pattern"`
+	MaxDiffChars   int      `json:"max_diff_chars"`
+	GenerateBody   bool     `json:"generate_body"`
+	TicketProvider string   `json:"ticket_provider"`
+	JiraBaseURL    string   `json:"jira_base_url"`
+	MaxTicketChars int      `json:"max_ticket_chars"`
 
 	APIKey string `json:"-"` // injected from ANTHROPIC_API_KEY
 }
@@ -23,12 +26,15 @@ type Config struct {
 // Default returns a ready-to-use configuration.
 func Default() Config {
 	return Config{
-		Model:         "claude-haiku-4-5-20251001",
-		Language:      "français",
-		Types:         []string{"feat", "fix", "refactor", "docs", "style", "test", "chore", "perf"},
-		TicketPattern: `[A-Z]{2,}-\d+`,
-		MaxDiffChars:  12000,
-		GenerateBody:  true,
+		Model:          "claude-haiku-4-5-20251001",
+		Language:       "français",
+		Types:          []string{"feat", "fix", "refactor", "docs", "style", "test", "chore", "perf"},
+		TicketPattern:  `[A-Z]{2,}-\d+`,
+		MaxDiffChars:   12000,
+		GenerateBody:   true,
+		TicketProvider: "",
+		JiraBaseURL:    "",
+		MaxTicketChars: 500,
 	}
 }
 
