@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"git-ai-commit/internal/ai"
+	aiprovider "git-ai-commit/internal/ai/provider"
 	"git-ai-commit/internal/config"
 	"git-ai-commit/internal/gitutil"
 	"git-ai-commit/internal/ticket"
@@ -39,11 +40,17 @@ func run() error {
 	if *modelOverride != "" {
 		cfg.Model = *modelOverride
 	}
-	if cfg.APIKey == "" {
-		return fmt.Errorf("missing ANTHROPIC_API_KEY environment variable")
-	}
+
 	if !gitutil.InRepo() {
 		return fmt.Errorf("this folder is not a git repository")
+	}
+
+	gen, err := aiprovider.New(aiprovider.Config{
+		Provider:      cfg.AIProvider,
+		OpenAIBaseURL: cfg.OpenAIBaseURL,
+	})
+	if err != nil {
+		return err
 	}
 
 	if *stageAll {
@@ -104,12 +111,11 @@ func run() error {
 		}
 	}
 
-	client := ai.New(cfg.APIKey, cfg.Model)
 	reader := bufio.NewReader(os.Stdin)
 	hint := ""
 
 	for {
-		msg, err := generate(client, cfg, diff, branch, ticketKey, ticketInfo, hint)
+		msg, err := generate(gen, cfg, diff, branch, ticketKey, ticketInfo, hint)
 		if err != nil {
 			return err
 		}
@@ -156,10 +162,10 @@ func run() error {
 	}
 }
 
-func generate(client *ai.Client, cfg config.Config, diff, branch, ticketKey string, ticketInfo *ticket.Ticket, hint string) (string, error) {
+func generate(gen ai.Generator, cfg config.Config, diff, branch, ticketKey string, ticketInfo *ticket.Ticket, hint string) (string, error) {
 	done := make(chan struct{})
 	go spinner("Generating message", done)
-	msg, err := client.GenerateCommit(context.Background(), ai.Request{
+	msg, err := ai.GenerateCommit(context.Background(), gen, cfg.Model, ai.Request{
 		Diff:           diff,
 		Branch:         branch,
 		Ticket:         ticketKey,

@@ -6,8 +6,9 @@ any code generation or modification.
 ## Overview
 
 `git-ai-commit` is a command-line tool written in **Go** that generates a commit
-message in the `Type - Quoi - Ticket` format from the staged diff, via the
-**Anthropic API**. It is used as a git subcommand: `git ai-commit`.
+message in the `Type - What - Ticket` format from the staged diff, via a
+configurable AI backend (Anthropic by default, OpenAI supported). It is used as a
+git subcommand: `git ai-commit`.
 
 Key mechanism: git automatically runs any binary named `git-ai-commit` present in
 the `PATH` when you type `git ai-commit`. The binary name is therefore
@@ -35,7 +36,13 @@ git-ai-commit/
 ├── .git-ai-commit.example.json     # example of overridable config
 └── internal/
     ├── ai/
-    │   └── ai.go                   # Anthropic API client + prompt building
+    │   ├── ai.go                   # Generator interface + shared prompt building
+    │   ├── anthropic/
+    │   │   └── anthropic.go        # Anthropic adapter (API v1/messages)
+    │   ├── openai/
+    │   │   └── openai.go           # OpenAI adapter (chat/completions)
+    │   └── provider/
+    │       └── factory.go          # factory: picks the AI adapter from config
     ├── config/
     │   └── config.go               # Config struct, loading from JSON file + env
     ├── gitutil/
@@ -57,33 +64,40 @@ One package = one directory. Never place multiple packages in the same directory
 ## Package responsibilities
 
 - **`main`** (`main.go`): flag parsing, orchestration, interactive loop
-  (`[v]alider / [e]diter / [r]égénérer / [q]uitter`), spinner. All error logic
+  (`[v]alidate / [e]dit / [r]egenerate / [q]uit`), spinner. All error logic
   bubbles up through `run() error` and is then printed with the `✖ ` prefix.
-- **`internal/config`**: `Config` + `loadConfig()`. Starts from the default values
-  (`defaultConfig`/`Default`), applies the first file found (missing fields keep
-  their default via `json.Unmarshal` onto the pre-filled struct), then reads the
-  API key from the environment.
+- **`internal/config`**: `Config` + `Load()`. Starts from the default values
+  (`Default()`), applies the first file found (missing fields keep their default
+  via `json.Unmarshal` onto the pre-filled struct). API keys come exclusively from
+  environment variables, read by each adapter.
 - **`internal/gitutil`**: all git interactions go through the `run` helper (via
   `os/exec`), which enriches the error with `stderr`. The commit is done via a
   temporary file (`git commit -F <tmp>`), with `-e` to open the editor.
-- **`internal/ai`**: Anthropic HTTP client and building of the system / user
-  prompts. Never log the API key.
+- **`internal/ai`**: defines the `Generator` interface and the shared prompt
+  building (`buildSystem` / `buildUser`). The `GenerateCommit` function orchestrates
+  prompt construction → adapter call → cleanup. Never log API keys.
+- **`internal/ai/anthropic`**: Anthropic adapter. Reads `ANTHROPIC_API_KEY`.
+  Default model: `claude-haiku-4-5-20251001`.
+- **`internal/ai/openai`**: OpenAI adapter. Reads `OPENAI_API_KEY`. Supports a
+  configurable `baseURL` for Azure / compatible APIs. Default model: `gpt-4o-mini`.
+- **`internal/ai/provider`**: factory that instantiates the right AI adapter from
+  config. Default = `anthropic`. Unknown provider → explicit error.
 - **`internal/ticket`**: `Provider` interface, provider-agnostic `Ticket` type,
   `Noop` adapter. `main` and `ai` depend ONLY on this package — never on a concrete
   adapter.
 - **`internal/ticket/jira`**: Jira adapter (API v2, Basic Auth). Contains the
   Jira type → commit type mapping (Bug→fix, Story→feat, etc.).
-- **`internal/ticket/provider`**: factory that instantiates the right adapter from
-  config. Placed in a separate sub-package to avoid the import cycle with
+- **`internal/ticket/provider`**: factory that instantiates the right ticket adapter
+  from config. Placed in a separate sub-package to avoid the import cycle with
   `ticket/jira`.
 
 ## Format contract (to preserve)
 
-The commit **subject** strictly follows: `Type - Quoi - Ticket`.
+The commit **subject** strictly follows: `Type - What - Ticket`.
 
 - `Type`: one word from the configurable list (`feat, fix, refactor, docs, style,
   test, chore, perf` by default).
-- `Quoi`: imperative description, ~60 characters, initial capital, no trailing period.
+- `What`: imperative description, ~60 characters, initial capital, no trailing period.
 - `Ticket`: reference extracted from the branch name, or `N/A`.
 
 If `generate_body` is enabled: a blank line then **at most 3 bullets** `- ...`
@@ -91,7 +105,7 @@ oriented toward "why / business impact", not a line-by-line inventory of the dif
 This structure is defined in `buildSystem` / `buildUser` (package `ai`) — any change
 to the format happens there.
 
-When ticket context is available, the "Quoi" must describe the **business outcome**
+When ticket context is available, the "What" must describe the **business outcome**
 (problem solved, value delivered), not the technical detail of the diff.
 
 The ticket is extracted from the branch name via regex (`ticket_pattern`, default
@@ -104,32 +118,60 @@ Files read, in order (missing fields = default values):
 1. `.git-ai-commit.json` at the repository root (per-project settings);
 2. `~/.config/git-ai-commit/config.json` (global settings).
 
-Fields: `model`, `language`, `types`, `ticket_pattern`, `max_diff_chars`,
-`generate_body`, `ticket_provider`, `jira_base_url`, `max_ticket_chars`.
-The API key comes **exclusively** from the `ANTHROPIC_API_KEY` environment variable
-(never from a file, never hardcoded).
+Fields: `ai_provider`, `model`, `openai_base_url`, `language`, `types`,
+`ticket_pattern`, `max_diff_chars`, `generate_body`, `ticket_provider`,
+`jira_base_url`, `max_ticket_chars`.
+
+API keys come **exclusively** from environment variables (never from a file, never
+hardcoded):
+- `ANTHROPIC_API_KEY`: required when `ai_provider = "anthropic"` (default).
+- `OPENAI_API_KEY`: required when `ai_provider = "openai"`.
 
 Ticket provider secrets — environment variables only:
 - `JIRA_EMAIL`: email address of the Jira account.
 - `JIRA_API_TOKEN`: Jira API token.
+
+## AI adapter pattern
+
+`main` and the prompt-building logic know ONLY the `ai.Generator` interface.
+Prompt construction (`buildSystem` / `buildUser`) is **shared and must never be
+duplicated** in adapters. To add a new AI provider:
+
+1. Create `internal/ai/<name>/<name>.go` implementing `ai.Generator`
+   (`Complete(ctx, system, user, model string, maxTokens int) (string, error)`).
+2. Register the new case in `internal/ai/provider/factory.go`.
+3. Add any config fields in `internal/config/config.go`.
+4. Document the new `PROVIDER_API_KEY` environment variable.
+5. No change to `main.go` or `internal/ai/ai.go`.
+
+### Error handling (AI providers — no graceful degradation)
+
+The AI engine is mandatory. If the selected provider is missing its key or the call
+fails: return a **clear, explicit error** naming the provider and the missing
+environment variable. Never commit an empty or placeholder message.
 
 ## Anthropic API integration
 
 - Endpoint: `POST https://api.anthropic.com/v1/messages`.
 - Headers: `content-type: application/json`, `x-api-key: <key>`,
   `anthropic-version: 2023-06-01`.
-- Default model: `claude-haiku-4-5-20251001` (fast and cheap, suited to a diff) —
-  overridable via config or `--model`.
-- The diff sent is truncated to `max_diff_chars` (default 12000) to keep cost under
-  control.
-- The response is parsed by extracting the `content[].text` blocks of type `text`.
+- Default model: `claude-haiku-4-5-20251001`.
+- Response: concatenate `content[].text` blocks of type `"text"`.
+
+## OpenAI API integration
+
+- Endpoint: `POST https://api.openai.com/v1/chat/completions` (overridable via
+  `openai_base_url`).
+- Headers: `content-type: application/json`, `Authorization: Bearer <key>`.
+- Default model: `gpt-4o-mini`.
+- Response: `choices[0].message.content`.
 
 ## CLI flags
 
 - `-y`: commit without confirmation.
 - `-a`: `git add -A` before generating.
 - `--print`: display the message without committing.
-- `--model <id>`: override the model.
+- `--model <id>`: override the model (applies to whichever provider is active).
 - `--no-ticket`: disable the ticket provider for this run.
 
 ## Adapter pattern — ticket providers
@@ -144,7 +186,7 @@ type. To add a new provider:
 4. Add the necessary config fields in `internal/config/config.go`.
 5. No change to `main.go` or `internal/ai/ai.go`.
 
-### Graceful degradation (mandatory)
+### Graceful degradation (mandatory for ticket providers)
 
 If the provider is not configured, if credentials are missing, or if the call fails
 (network, 401, 404, timeout): **never block the commit**. Fall back silently to
@@ -162,7 +204,7 @@ gofmt -w .                      # formatting (mandatory before commit)
 
 To test under real conditions as a git subcommand: place the `git-ai-commit` binary
 in a directory on the `PATH`, then run `git ai-commit` in a repository with staged
-changes (requires `ANTHROPIC_API_KEY`).
+changes (requires the appropriate API key env variable).
 
 ## Code conventions
 
@@ -170,7 +212,7 @@ changes (requires `ANTHROPIC_API_KEY`).
 - Errors are returned, not handled with `panic`; messages in English, contextualized
   with `fmt.Errorf("...: %w", err)`.
 - No network side effects in tests; use `net/http/httptest` to simulate external
-  APIs (see `internal/ticket/jira/jira_test.go`).
+  APIs (see `internal/ticket/jira/jira_test.go`, `internal/ai/anthropic/anthropic_test.go`).
 - Add a test when introducing a non-trivial pure function (extraction, parsing,
   formatting, type mapping).
 
@@ -178,9 +220,11 @@ changes (requires `ANTHROPIC_API_KEY`).
 
 - The binary name `git-ai-commit` (git subcommand).
 - The absence of external dependencies.
-- The `Type - Quoi - Ticket` format contract.
-- The origin of the API key (environment variable only).
+- The `Type - What - Ticket` format contract.
+- API keys from environment variables only.
 - User-facing text in English.
 - Operation without a ticket provider (identical to before).
 - `main` and `ai` depend ONLY on `ticket.Provider` / `ticket.Ticket`, never on a
-  concrete adapter.
+  concrete ticket adapter.
+- `main` depends ONLY on `ai.Generator`, never on a concrete AI adapter.
+- Prompt construction stays in `internal/ai`, shared, never duplicated.

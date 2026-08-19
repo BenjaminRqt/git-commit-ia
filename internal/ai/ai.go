@@ -1,33 +1,19 @@
+// Package ai handles prompt building and commit message generation.
+// The actual HTTP call is delegated to a Generator adapter.
 package ai
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
-	"time"
 
 	"git-ai-commit/internal/ticket"
 )
 
-const endpoint = "https://api.anthropic.com/v1/messages"
-
-// Client wraps calls to the Anthropic API.
-type Client struct {
-	apiKey string
-	model  string
-	http   *http.Client
-}
-
-// New creates a ready-to-use client.
-func New(apiKey, model string) *Client {
-	return &Client{
-		apiKey: apiKey,
-		model:  model,
-		http:   &http.Client{Timeout: 60 * time.Second},
-	}
+// Generator is the interface that every AI backend adapter must implement.
+// It receives already-built prompts and returns raw text.
+type Generator interface {
+	Complete(ctx context.Context, system, user, model string, maxTokens int) (string, error)
 }
 
 // Request gathers the context needed for message generation.
@@ -44,61 +30,15 @@ type Request struct {
 	MaxDiffChars   int
 }
 
-// GenerateCommit asks the model for a formatted commit message.
-func (c *Client) GenerateCommit(ctx context.Context, r Request) (string, error) {
-	payload := map[string]any{
-		"model":      c.model,
-		"max_tokens": 1024,
-		"system":     buildSystem(r),
-		"messages": []map[string]string{
-			{"role": "user", "content": buildUser(r)},
-		},
-	}
-	body, err := json.Marshal(payload)
+// GenerateCommit builds the prompts and delegates the API call to the generator.
+func GenerateCommit(ctx context.Context, gen Generator, model string, r Request) (string, error) {
+	system := buildSystem(r)
+	user := buildUser(r)
+	raw, err := gen.Complete(ctx, system, user, model, 1024)
 	if err != nil {
 		return "", err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("API call: %w", err)
-	}
-	defer resp.Body.Close()
-	
-	var out struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("unreadable response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		if out.Error != nil {
-			return "", fmt.Errorf("API %d: %s", resp.StatusCode, out.Error.Message)
-		}
-		return "", fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	var sb strings.Builder
-	for _, blk := range out.Content {
-		if blk.Type == "text" {
-			sb.WriteString(blk.Text)
-		}
-	}
-	return cleanup(sb.String()), nil
+	return cleanup(raw), nil
 }
 
 // cleanup removes potential backticks or fences the model might add.
